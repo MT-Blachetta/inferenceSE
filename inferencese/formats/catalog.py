@@ -224,3 +224,23 @@ def open_model(path: str, manifest: str | None = None) -> Catalog:
 
 __all__ = ["Catalog", "TensorEntry", "open_model", "add_safetensors", "add_gguf",
            "add_npy", "read_safetensors_header", "GGML_BLOCK"]
+
+
+def write_safetensors(path: str, tensors: dict, metadata: dict | None = None) -> None:
+    """Minimal safetensors writer.  ``tensors``: name -> (dtype, shape, bytes)."""
+    header, off = {}, 0
+    if metadata:
+        header["__metadata__"] = {k: str(v) for k, v in metadata.items()}
+    for name, (dtype, shape, data) in tensors.items():
+        n = len(data)
+        if n != nbytes_of(dtype, shape):
+            raise ValueError(f"{name}: {n} bytes do not match {dtype}{list(shape)}")
+        header[name] = {"dtype": dtype, "shape": list(shape), "data_offsets": [off, off + n]}
+        off += n
+    blob = json.dumps(header, separators=(",", ":")).encode()
+    blob += b" " * (-len(blob) % 8)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<Q", len(blob)))
+        f.write(blob)
+        for _, (_, _, data) in tensors.items():
+            f.write(data)

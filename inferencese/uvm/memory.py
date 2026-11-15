@@ -440,7 +440,9 @@ class UnifiedMemory:
             free = sum(self.capacity) - sum(self.used)
             if free < part[0].nbytes:
                 break
-            self.acquire_many(part, device)
+            need = sum(b.nbytes for b in part)
+            gpu_ok = device == T_GPU and self.used[T_GPU] + need <= self.capacity[T_GPU]
+            self.acquire_many(part, T_GPU if gpu_ok else T_RAM)
             loaded += sum(1 for b in part if b.tier != T_SSD)
         return loaded
 

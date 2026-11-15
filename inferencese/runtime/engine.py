@@ -52,18 +52,29 @@ class Engine:
         self.cfg = p.config(cfg_dir)
 
         # ---- backend and tiers
-        self.B = make_backend(rt.get("backend", "auto"), rt.get("device", "auto"),
-                              threads=rt.get("threads"))
         hw = self.hardware = detect(self.model_dir or ".")
         tiers = memspec.get("tiers", {})
         g, r, s = tiers.get("gpu", {}), tiers.get("ram", {}), tiers.get("ssd", {})
-        if self.B.is_gpu:
-            free = hw["gpus"][0]["free"] if hw["gpus"] else 0
-            gpu_bytes = _capacity(g.get("capacity", "auto"), free, g.get("reserve", "6GiB"))
-        elif g.get("simulate"):
-            gpu_bytes = parse_size(g.get("capacity", 0))      # VRAM emulated in host memory
+        if dry:
+            # planning: size the tiers from the hardware the profile describes
+            from ..backend import NumpyBackend
+            self.B = NumpyBackend()
+            ph = p.hardware or {}
+            gpus = ph.get("gpu") or []
+            vram = parse_size(gpus[0]["vram"]) if gpus else 0
+            gpu_bytes = _capacity(g.get("capacity", "auto"), vram, g.get("reserve", "6GiB")) if vram else 0
+            if ph.get("ram", {}).get("total"):
+                hw["ram"]["available"] = parse_size(ph["ram"]["total"])
         else:
-            gpu_bytes = 0
+            self.B = make_backend(rt.get("backend", "auto"), rt.get("device", "auto"),
+                                  threads=rt.get("threads"))
+            if self.B.is_gpu:
+                free = hw["gpus"][0]["free"] if hw["gpus"] else 0
+                gpu_bytes = _capacity(g.get("capacity", "auto"), free, g.get("reserve", "6GiB"))
+            elif g.get("simulate"):
+                gpu_bytes = parse_size(g.get("capacity", 0))  # VRAM emulated in host memory
+            else:
+                gpu_bytes = 0
         ram_bytes = _capacity(r.get("capacity", "auto"), hw["ram"].get("available"),
                               r.get("reserve", "8GiB"))
         pol = dict(memspec.get("policy", {}) or {})
@@ -85,7 +96,9 @@ class Engine:
         program, path = p.program()
         self.vm = VM(program, p.ops(), self.ctx, path)
         self.tokenizer = None if dry else p.tokenizer(cfg_dir)
-        self.heat_path = os.path.join(p.state_dir(), "heat.json")
+        import hashlib
+        tag = hashlib.sha1(os.path.abspath(self.model_dir or "-").encode()).hexdigest()[:10]
+        self.heat_path = os.path.join(p.state_dir(), f"heat-{tag}.json")
         self.last_logits = None
         self.timing = {"load_s": 0.0, "prefill_tokens": 0, "prefill_s": 0.0,
                        "decode_tokens": 0, "decode_s": 0.0}
@@ -148,19 +161,28 @@ class Engine:
         return logits
 
     def feed(self, tokens, on_progress=None) -> np.ndarray:
-        """Bring the sequence state up to ``tokens``, reusing the already
-        processed prefix (a follow-up chat turn only pays for its new tokens)."""
+        """Bring the sequence state up to ``tokens``, reusing the longest
+        prefix that is already processed (a follow-up chat turn only pays for
+        its new tokens)."""
         tokens = [int(t) for t in tokens]
-        done = self.state.tokens
-        if not (len(done) <= len(tokens) and tokens[:len(done)] == done) or (
-                len(done) == len(tokens) and self.last_logits is None):
-            self.state.reset()
-            self.last_logits = None
-            done = []
-        todo = tokens[len(done):]
         max_ctx = int(self.profile.runtime.get("max_context", 0) or 0)
         if max_ctx and len(tokens) > max_ctx:
             raise ValueError(f"prompt has {len(tokens)} tokens; profile limit is {max_ctx}")
+        done = self.state.tokens
+        common = 0
+        for a, b in zip(done, tokens):
+            if a != b:
+                break
+            common += 1
+        if common < len(done) or (common == len(tokens) and self.last_logits is None):
+            logits = self.state.rewind(common if common < len(done) else common - 1)
+            self.last_logits = logits if len(self.state.tokens) == len(tokens) else None
+            if self.last_logits is None and len(self.state.tokens) == len(tokens):
+                self.state.rewind(max(0, len(tokens) - 1))
+        todo = tokens[len(self.state.tokens):]
+        if not todo and self.last_logits is None:
+            self.state.reset()
+            todo = tokens
         chunk = max(1, int(self.profile.runtime.get("prefill_chunk", 256)))
         t0 = time.perf_counter()
         for i in range(0, len(todo), chunk):
@@ -169,6 +191,7 @@ class Engine:
                 on_progress(min(i + chunk, len(todo)), len(todo))
         self.timing["prefill_tokens"] += len(todo)
         self.timing["prefill_s"] += time.perf_counter() - t0
+        self.state.save_checkpoint(self.last_logits)
         return self.last_logits
 
     def generate(self, prompt_tokens, max_new_tokens: int = 128, sampling: dict | None = None,
@@ -194,34 +217,61 @@ class Engine:
                 self.timing["decode_s"] += time.perf_counter() - t0
 
     # ---------------------------------------------------------- text level
-    def complete(self, prompt: str, **kw):
+    def prompt_ids(self, prompt: str) -> list:
         ids = self.tokenizer.encode(prompt)
         if getattr(self.tokenizer, "bos_id", None) is not None and self.profile.runtime.get("add_bos", True):
             ids = [self.tokenizer.bos_id] + ids
-        yield from self._text(ids, **kw)
+        return ids
+
+    def complete(self, prompt: str, **kw):
+        for _, piece in self.stream_text(self.prompt_ids(prompt), **kw):
+            yield piece
 
     def chat(self, messages: list[dict], template_args: dict | None = None, **kw):
+        """Yield the answer text of a chat completion (reasoning is dropped;
+        use ``stream_text(..., channels=True)`` to receive it)."""
         ids = self.tokenizer.apply_chat(messages, add_generation_prompt=True,
                                         **(template_args or {}))
-        yield from self._text(ids, **kw)
+        for channel, piece in self.stream_text(ids, channels=True, **kw):
+            if channel == "content":
+                yield piece
 
-    def _text(self, ids, stop: list[str] | None = None, **kw):
+    def stream_text(self, ids, max_new_tokens: int = 128, sampling: dict | None = None,
+                    stop: list[str] | None = None, channels: bool = False,
+                    usage: dict | None = None, on_progress=None):
+        """Generate and yield ``(channel, text)``.  ``channel`` is "content"
+        unless the tokenizer splits the output (e.g. "reasoning")."""
         from ..tokenizers import StreamDecoder
         dec = StreamDecoder(self.tokenizer)
-        emitted = ""
-        for tok in self.generate(ids, **kw):
-            piece = dec.push(tok)
-            if not piece:
-                continue
-            emitted += piece
-            if stop:
-                cut = min((emitted.find(s) for s in stop if s in emitted), default=-1)
-                if cut >= 0:
-                    keep = len(piece) - (len(emitted) - cut)
-                    if keep > 0:
-                        yield piece[:keep]
-                    return
-            yield piece
+        filt = (self.tokenizer.output_filter()
+                if channels and hasattr(self.tokenizer, "output_filter") else None)
+        usage = usage if usage is not None else {}
+        n, content, finish = 0, "", None
+        gen = self.generate(ids, max_new_tokens, sampling, on_progress=on_progress)
+        try:
+            for tok in gen:
+                n += 1
+                usage["completion_tokens"] = n
+                piece = dec.push(tok)
+                if not piece:
+                    continue
+                for channel, text in (filt.push(piece) if filt else [("content", piece)]):
+                    if stop and channel == "content":
+                        before = len(content)
+                        content += text
+                        cut = min((content.find(s) for s in stop if s in content), default=-1)
+                        if cut >= 0:
+                            if cut > before:
+                                yield channel, text[:cut - before]
+                            finish = "stop"
+                            break
+                    yield channel, text
+                if finish or (filt is not None and filt.done):
+                    finish = "stop"
+                    break
+        finally:
+            gen.close()
+        usage["finish_reason"] = finish or ("length" if n >= max_new_tokens else "stop")
 
     # ---------------------------------------------------------------- misc
     def reset(self) -> None:

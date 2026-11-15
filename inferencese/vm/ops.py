@@ -43,7 +43,10 @@ def embed(ctx, w, tokens, scale=1.0):
 
 @op("linear")
 def linear(ctx, x, w, bias=None):
-    y = ctx.B.linear(x, _w(ctx, w))
+    if isinstance(w, W) and ctx.ws.is_chunked(w):       # matrix streamed in row chunks
+        y = ctx.B.cat([ctx.B.linear(x, c) for c in ctx.ws.iter_chunks(w)], -1)
+    else:
+        y = ctx.B.linear(x, _w(ctx, w))
     if bias is not None and (not isinstance(bias, W) or ctx.ws.has(bias)):
         y = y + ctx.B.f32(_w(ctx, bias))
     return y

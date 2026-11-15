@@ -1,0 +1,70 @@
+# Unified virtual memory layout for myKimi3.
+#
+#   virtual address space  = the 96 model shards, mapped in place (1.56 TB, no copy)
+#                          + pageable per-conversation state (swap file)
+#   tier 0  VRAM  ~90 GiB  dense weights (attention, shared experts, routers, head)
+#   tier 1  RAM  ~110 GiB  the dense weights that do not fit in VRAM, then experts
+#   tier 2  SSD            everything; read with O_DIRECT, 32 parallel requests
+#
+# Every decoded token touches all dense weights (104 GiB) and 16 of the 896
+# experts in each of 92 layers (24 GiB out of 1.35 TiB).  Dense weights are
+# therefore kept resident and experts are cached by observed popularity.
+tiers:
+  gpu:
+    capacity: auto                # free VRAM at start-up minus reserve
+    reserve: 5GiB                 # activations, KDA state, expert staging, CUDA context
+  ram:
+    capacity: auto                # available RAM at start-up minus reserve
+    reserve: 12GiB                # OS, desktop, Python heap, I/O buffers in flight
+  ssd:
+    direct_io: true               # bypass the page cache: the RAM tier is the cache
+    io_threads: 32
+    swap:
+      path: null                  # default: ~/.cache/inferencese/myKimi3/swap.bin
+
+policy:
+  name: plan                      # exact next use for dense blocks, expected next use for experts
+  alpha: 0.02                     # learning rate of the per-expert popularity estimate
+
+mirror_gpu_in_ram: false          # do not waste RAM on copies of what already sits in VRAM
+
+classes:                          # first match wins
+  expert:
+    # one block = one whole expert: w1/w2/w3 packed + scales, 17.5 MB contiguous on disk
+    match: ['\.block_sparse_moe\.experts\.\d+\.']
+    group: '^(.*\.block_sparse_moe\.experts\.\d+)\.'
+    tier: ram
+    prior: 0.0179                 # 16 / 896 before anything has been observed
+  embedding:
+    match: ['embed_tokens\.weight$']
+    tier: ram
+    chunk_bytes: 1MiB             # a token lookup reads 1 MiB instead of 2.2 GiB
+    prior: 0.01
+  lm_head:
+    match: ['lm_head\.weight$']
+    tier: gpu
+    planned: true
+    chunk_bytes: 512MiB
+  vision:
+    match: ['^vision_tower\.', '^mm_projector\.']
+    tier: ssd                     # never loaded by the text path
+    cache: false
+  dense:
+    match: ['.*']
+    tier: gpu
+    planned: true                 # same order every token: next use is known exactly
+
+state:
+  tier: gpu                       # context caches may sit in VRAM, page to RAM, then to swap
+  rows_per_block: 1024
+
+warmup:                           # initial cache fill, in priority order
+  - {class: lm_head, device: gpu}
+  - {class: dense, device: gpu}   # fills VRAM, remainder lands in RAM
+  - {class: expert, device: ram, heat: true}   # experts that were popular in earlier runs
+
+simulate:                         # workload model for `inferencese simulate`
+  stochastic:
+    - class: expert
+      group_by: 'layers\.(\d+)\.'
+      picks: 16

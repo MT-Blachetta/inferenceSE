@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inferencese"
+version = "0.1.0"
+description = "Run models larger than RAM: an inference engine that uses the SSD as process memory"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pyyaml>=6"]
+
+[project.optional-dependencies]
+gpu = ["torch>=2.3"]
+tokenizers = ["tokenizers>=0.15", "jinja2>=3", "tiktoken>=0.7"]
+gguf = ["gguf"]
+test = ["pytest"]
+
+[project.scripts]
+inferencese = "inferencese.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["inferencese*"]
+
+[tool.setuptools.package-data]
+inferencese = ["server/webui/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

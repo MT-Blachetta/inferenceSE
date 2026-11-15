@@ -1,0 +1,51 @@
+# Optimization profile "myKimi3"
+# Kimi K3.1 Pro (moonshotai/Kimi-K3.1-Pro, 1.56 TB) on one RTX PRO 6000
+# Blackwell (96 GB), 128 GB DDR5 and a WD_BLACK SN8100 4 TB NVMe SSD.
+name: myKimi3
+description: Kimi K3.1 Pro, 2.8T-parameter MoE, streamed from NVMe through 96 GB VRAM + 128 GB RAM
+format_version: 1
+
+model:
+  id: moonshotai/Kimi-K3.1-Pro
+  revision: d9e99b0792a5e93b78ea9bea62a68167e36ddd9e
+  source: https://huggingface.co/moonshotai/Kimi-K3.1-Pro
+  type: llm
+  architecture: mixture-of-experts          # 896 routed experts/layer, 16 active, 2 shared
+  modality: [text]                          # the vision tower is mapped but not executed
+  file_types: [safetensors]
+  tensor_types: [BF16, F32, U8]             # U8 = MXFP4-packed expert weights + E8M0 scales
+  size_bytes: 1561217377280
+  files: 96                                 # one shard per decoder layer (+ head, projector, vision)
+  parameters: {total: 2.8T, active_per_token: 104B}
+  context_length: 1048576
+  path: null                                # set to the folder holding model-000NN-of-000096.safetensors
+  config: facts/config.json                 # used when the model folder has no config.json
+  config_key: text_config
+  manifest: facts/catalog.json.xz           # tensor index, for planning without the weights
+
+program: model.seil                         # forward pass in SEIL
+ops: ops.py                                 # KDA, gated DSA, AttnRes, MXFP4 latent MoE
+tokenizer:
+  plugin: tokenizer.py
+  thinking: true
+  thinking_effort: max                      # low | high | max  (API field: reasoning_effort)
+  trust_model_code: false                   # true: import the model's encoding_k3.py for tools/JSON mode
+hardware: hardware.yaml
+memory: memory.yaml
+
+runtime:
+  backend: torch
+  device: cuda
+  threads: 16
+  prefill_chunk: 1024             # prompt tokens per sweep over the 1.56 TB of weights
+  max_context: 1048576
+  add_bos: false
+  expert_batch: 16                # experts read + decoded per group
+  expert_prefetch_layers: 2       # read ahead the previous token's experts of the next 2 layers
+  expert_prefetch_max_tokens: 4   # ... only while decoding
+  dsa_query_batch: 64
+  kda_a_log_axis: head            # A_log is indexed per head, as in the reference kernels
+
+sampling:                         # model card: temperature 1.0, top-p 0.95
+  temperature: 1.0
+  top_p: 0.95

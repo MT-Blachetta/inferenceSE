@@ -1,0 +1,69 @@
+; Kimi K3.1 Pro - text decoder (93 layers: 69 KDA + 24 gated DSA, latent MoE).
+;
+; Residual stream: Kimi replaces the plain residual by "attention residuals".
+; %prefix is the running sum inside the current block of 12 layers, %blocks the
+; outputs of completed blocks; every sub-layer input is a learned softmax mix of
+; those sources (op attn_res, see ops.py).
+
+program kimi_k31
+
+func main(%tokens) -> %logits
+  let M = "language_model.model"
+  %prefix = embed @"{M}.embed_tokens.weight", %tokens
+  %blocks = new_blocks
+  %delta = scale %prefix, 0.0                 ; layer 0 has no previous MLP output
+  for i in range(cfg.num_hidden_layers)
+    %prefix, %delta = call layer(i, %prefix, %delta, %blocks)
+  end
+  let nb = (cfg.num_hidden_layers + cfg.attn_res_block_size - 1) // cfg.attn_res_block_size
+  %h, %prefix = attn_res %prefix, %delta, %blocks, \
+                  norm=@"{M}.output_attn_res_norm.weight", \
+                  proj=@"{M}.output_attn_res_proj.weight", \
+                  num_blocks=nb, eps=cfg.rms_norm_eps
+  %h = last %h
+  %h = rmsnorm %h, @"{M}.norm.weight", eps=cfg.rms_norm_eps
+  %logits = linear %h, @"language_model.lm_head.weight"
+  ret %logits
+end
+
+func layer(i, %prefix, %delta, %blocks) -> %prefix, %delta
+  let L = f"language_model.model.layers.{i}"
+  let bs = cfg.attn_res_block_size
+  let writer = i % bs == 0                    ; first layer of a block
+  let nb = (i + bs - 1) // bs                 ; completed blocks visible to this layer
+
+  ; ---- attention ------------------------------------------------------
+  %h, %prefix = attn_res %prefix, %delta, %blocks, \
+                  norm=@"{L}.self_attention_res_norm.weight", \
+                  proj=@"{L}.self_attention_res_proj.weight", \
+                  out_norm=@"{L}.input_layernorm.weight", \
+                  num_blocks=nb, write=(i // bs if writer else -1), eps=cfg.rms_norm_eps
+  if (i + 1) in cfg.linear_attn_config.kda_layers
+    %a = kda %h, layer=i, prefix=f"{L}.self_attn"
+  else
+    %a = dsa %h, layer=i, prefix=f"{L}.self_attn"
+  end
+
+  ; ---- feed-forward ---------------------------------------------------
+  if writer
+    ; the block was just written: the attention output starts a new prefix
+    %h, %prefix = attn_res %a, None, %blocks, \
+                    norm=@"{L}.mlp_res_norm.weight", proj=@"{L}.mlp_res_proj.weight", \
+                    out_norm=@"{L}.post_attention_layernorm.weight", \
+                    num_blocks=nb + 1, eps=cfg.rms_norm_eps
+  else
+    %h, %prefix = attn_res %prefix, %a, %blocks, \
+                    norm=@"{L}.mlp_res_norm.weight", proj=@"{L}.mlp_res_proj.weight", \
+                    out_norm=@"{L}.post_attention_layernorm.weight", \
+                    num_blocks=nb, eps=cfg.rms_norm_eps
+  end
+  if i < cfg.first_k_dense_replace
+    %g = linear %h, @"{L}.mlp.gate_proj.weight"
+    %u = linear %h, @"{L}.mlp.up_proj.weight"
+    %m = situ %g, %u
+    %delta = linear %m, @"{L}.mlp.down_proj.weight"
+  else
+    %delta = moe %h, layer=i, prefix=f"{L}.block_sparse_moe"
+  end
+  ret %prefix, %delta
+end

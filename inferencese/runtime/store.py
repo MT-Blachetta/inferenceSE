@@ -208,6 +208,19 @@ class WeightStore:
                                for p, r in zip(parts, rows)], 0)
         return self.get_many([name])[0]
 
+    def is_chunked(self, name: str) -> bool:
+        return bool(self._resolve(name).chunks)
+
+    def iter_chunks(self, name: str):
+        """Yield a chunked tensor piece by piece (rows), so a matrix larger than
+        the caches can still be multiplied with bounded memory."""
+        loc = self._resolve(name)
+        e = loc.entry
+        row_bytes = e.nbytes // e.shape[0]
+        for blk in loc.chunks:
+            h = self.mem.acquire(blk, self.device)
+            yield self.B.weight(h, e.dtype, (blk.nbytes // row_bytes,) + tuple(e.shape[1:]))
+
     def rows(self, name: str, ids) -> object:
         """Gather rows of a (possibly chunked) 2-D tensor, touching only the
         chunks that contain them - an embedding lookup reads kilobytes."""
@@ -294,6 +307,7 @@ class SeqState:
         self.vars: dict = {}
         self.logs: dict[str, PagedLog] = {}
         self.tokens: list[int] = []
+        self.checkpoint = None
         self._uid = id(self)
 
     @property
@@ -312,3 +326,29 @@ class SeqState:
         for lg in self.logs.values():
             lg.reset()
         self.tokens = []
+        self.checkpoint = None
+
+    # A follow-up request usually shares a long prefix with the previous one.
+    # Paged logs can simply be truncated; recurrent state cannot be unwound, so
+    # one snapshot of it is kept at the end of the last prompt.
+    def save_checkpoint(self, extra=None) -> None:
+        self.checkpoint = (len(self.tokens), {k: self.B.copy(v) for k, v in self.vars.items()}, extra)
+
+    def rewind(self, pos: int):
+        """Truncate to the longest restorable prefix <= ``pos``.  Returns the
+        ``extra`` payload stored with the checkpoint if it was hit exactly."""
+        extra = None
+        if self.vars or (self.checkpoint and self.checkpoint[1]):
+            ck = self.checkpoint
+            if ck is None or ck[0] > pos:
+                self.reset()
+                return None
+            pos = ck[0]
+            self.vars = {k: self.B.copy(v) for k, v in ck[1].items()}
+            extra = ck[2]
+        elif self.checkpoint and self.checkpoint[0] == pos:
+            extra = self.checkpoint[2]
+        for lg in self.logs.values():
+            lg.n = min(lg.n, pos)
+        self.tokens = self.tokens[:pos]
+        return extra

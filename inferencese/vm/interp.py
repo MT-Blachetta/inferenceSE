@@ -68,7 +68,7 @@ class VM:
             try:
                 return regs[o.name]
             except KeyError:
-                raise VMError(f"register %{o.name} used before assignment") from None
+                raise NameError(f"register %{o.name} used before assignment") from None
         if isinstance(o, il.WeightT):
             return W(o.render(env))
         if isinstance(o, il.ListT):

@@ -1,0 +1,35 @@
+# The machine this profile was tuned for.  At start-up the engine detects the
+# real hardware; tier capacities marked "auto" in memory.yaml follow what it
+# finds, the figures below drive `inferencese plan` and `inferencese simulate`.
+gpu:
+  - name: NVIDIA RTX PRO 6000 Blackwell
+    vram: 96GiB
+    memory_type: GDDR7 (ECC)
+    clock_mhz: {core: 1590, boost: 2617}
+    bus: PCIe 5.0 x16
+cpu:
+  name: AMD Ryzen 9 9950X3D
+  cores: 16
+  threads: 32
+  base_ghz: 4.30
+  simd: [AVX2, AVX-512, AVX512_BF16]
+ram:
+  total: 128GiB
+  modules: 2 x 64 GB DDR5-6000 (PC5-48000) CL32-44-44-96, 1.40 V, unbuffered, on-die ECC, AMD EXPO
+  channels: 2
+mainboard: ASRock X870E Taichi (AM5)
+ssd:
+  name: WD_BLACK SN8100 4000GB
+  interface: NVMe PCIe 5.0 x4
+  capacity: 4000GB                # 3.64 TiB; the model occupies 1.56 TB of it
+  free_after_model_estimate: 2.4TB
+
+# Throughput assumptions for the estimator (GiB/s).  Conservative sustained
+# figures, not datasheet peaks (SN8100 peaks near 14.9 GB/s sequential,
+# DDR5-6000 dual channel near 90 GB/s theoretical).
+throughput:
+  ssd_read: 9.0                   # large O_DIRECT reads, 16-32 threads
+  host_to_gpu: 20.0               # pinned RAM -> VRAM over PCIe 5.0 x16
+  ram_bandwidth: 60.0
+  gpu_dense_seconds_per_token: 0.12   # 111 GB of BF16 matrix-vector products on GDDR7
+  gpu_expert_seconds_each: 0.0004     # unpack + 3 GEMVs for one 17.5 MB MXFP4 expert
