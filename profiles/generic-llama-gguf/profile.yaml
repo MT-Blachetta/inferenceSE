@@ -1,0 +1,27 @@
+# Generic profile for LLaMA-family models in GGUF files (llama.cpp format).
+# Dimensions, the vocabulary and the chat template are read from the GGUF
+# metadata; quantised tensors (Q4_0, Q5_0, Q8_0, Q4_K, Q6_K, F16, BF16, F32)
+# stay quantised in every cache tier and are decoded when used.
+name: generic-llama-gguf
+description: Decoder-only transformer from a single .gguf file (LLaMA / Mistral / SmolLM / Qwen2 layouts).
+format_version: 1
+
+model:
+  type: llm
+  architecture: dense-transformer
+  file_types: [gguf]
+  path: null                     # pass --model /path/to/model.gguf
+  aliases:
+    output.weight: token_embd.weight      # tied embeddings
+
+program: model.seil
+tokenizer: {type: auto}          # tokenizer.json beside the file, else the embedded BPE vocabulary
+memory: memory.yaml
+
+runtime:
+  backend: auto
+  device: auto
+  prefill_chunk: 256
+  add_bos: true
+
+sampling: {temperature: 0.7, top_p: 0.9, top_k: 40}

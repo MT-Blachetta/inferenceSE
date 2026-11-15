@@ -128,7 +128,40 @@ def _raise(msg):
     raise ValueError(msg)
 
 
-def load_tokenizer(model_dir: str | None, spec: dict | None = None, profile_dir: str | None = None):
+class GGUFTokenizer(HFTokenizer):
+    """Tokenizer rebuilt from the vocabulary embedded in a GGUF file
+    (byte-level BPE, ``tokenizer.ggml.model == "gpt2"``)."""
+
+    def __init__(self, meta: dict, spec: dict | None = None):
+        from tokenizers import AddedToken, Tokenizer as _Tok, decoders, models, pre_tokenizers
+        kind = meta.get("tokenizer.ggml.model")
+        if kind != "gpt2":
+            raise NotImplementedError(
+                f"GGUF tokenizer model {kind!r} is not supported; place the model's "
+                f"tokenizer.json next to the .gguf file")
+        tokens = meta["tokenizer.ggml.tokens"]
+        types = meta.get("tokenizer.ggml.token_type") or [1] * len(tokens)
+        vocab = {t: i for i, t in enumerate(tokens)}
+        merges = [tuple(m.split(" ", 1)) for m in meta.get("tokenizer.ggml.merges", [])]
+        tk = _Tok(models.BPE(vocab=vocab, merges=merges))
+        tk.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+        tk.decoder = decoders.ByteLevel()
+        tk.add_special_tokens([AddedToken(t, special=True) for t, ty in zip(tokens, types) if ty in (3, 4)])
+        self.tk = tk
+        self.cfg = {}
+        self.template = (spec or {}).get("chat_template") or meta.get("tokenizer.chat_template")
+        bos, eos = meta.get("tokenizer.ggml.bos_token_id"), meta.get("tokenizer.ggml.eos_token_id")
+        self.special = {"bos_token": tokens[bos] if bos is not None else "",
+                        "eos_token": tokens[eos] if eos is not None else ""}
+        self.bos_id = bos if meta.get("tokenizer.ggml.add_bos_token", True) else None
+        self.eos_ids = {eos} if eos is not None else set()
+        for name in ("<|im_end|>", "<|eot_id|>", "<|end|>"):
+            if name in vocab:
+                self.eos_ids.add(vocab[name])
+
+
+def load_tokenizer(model_dir: str | None, spec: dict | None = None, profile_dir: str | None = None,
+                   gguf_meta: dict | None = None):
     spec = spec or {}
     kind = spec.get("type", "auto")
     if kind in ("auto", "hf") and model_dir and os.path.exists(
@@ -136,4 +169,6 @@ def load_tokenizer(model_dir: str | None, spec: dict | None = None, profile_dir:
         return HFTokenizer(model_dir, spec)
     if kind == "hf":
         raise FileNotFoundError(f"no tokenizer.json in {model_dir}")
+    if kind in ("auto", "gguf") and gguf_meta and "tokenizer.ggml.tokens" in gguf_meta:
+        return GGUFTokenizer(gguf_meta, spec)
     return ByteTokenizer(eos=spec.get("eos"))

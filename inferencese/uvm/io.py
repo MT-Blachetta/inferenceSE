@@ -31,7 +31,8 @@ class FileStore:
     """Positional reader over a set of files, addressed by small integer ids."""
 
     def __init__(self, direct: bool = True, drop_page_cache: bool = True,
-                 io_threads: int = 8, max_request: int = 64 << 20):
+                 io_threads: int = 8, max_request: int = 64 << 20, allocator=None):
+        self.alloc = allocator or aligned_buffer      # nbytes -> page-aligned uint8 array
         self.direct = direct
         self.drop_page_cache = drop_page_cache
         self.max_request = max_request
@@ -80,7 +81,7 @@ class FileStore:
         start = offset - offset % ALIGN if direct else offset
         lead = offset - start
         span = lead + nbytes
-        buf = aligned_buffer(span)
+        buf = self.alloc(span)
         want = (span + ALIGN - 1) // ALIGN * ALIGN if direct else span
         mv = memoryview(buf)
         done = 0

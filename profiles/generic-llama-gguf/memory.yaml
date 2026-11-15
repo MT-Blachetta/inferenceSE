@@ -1,0 +1,9 @@
+tiers:
+  gpu: {capacity: auto, reserve: 2GiB}
+  ram: {capacity: auto, reserve: 4GiB}
+  ssd: {direct_io: true, io_threads: 8}
+policy: {name: plan}
+classes:
+  embedding: {match: ['^token_embd\.weight$'], tier: ram, chunk_bytes: 4MiB, prior: 0.05}
+  weights: {match: ['.*'], tier: gpu, planned: true}
+state: {tier: gpu, rows_per_block: 512}

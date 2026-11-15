@@ -37,6 +37,7 @@ runtime:
   backend: torch
   device: cuda
   threads: 16
+  pin_host_memory: true           # read SSD blocks into page-locked RAM for fast RAM -> VRAM copies
   prefill_chunk: 1024             # prompt tokens per sweep over the 1.56 TB of weights
   max_context: 1048576
   add_bos: false

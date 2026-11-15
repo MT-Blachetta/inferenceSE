@@ -16,14 +16,32 @@ _NAMED = {"f32": torch.float32, "i64": torch.int64, "bool": torch.bool,
 class TorchDevice:
     """Tier-0 allocator: raw byte blocks living in VRAM as uint8 tensors."""
 
-    def __init__(self, device):
+    def __init__(self, device, pin: bool = False):
         self.dev = device
         self.name = str(device)
+        self.pin = bool(pin) and device.type == "cuda"
+        if self.pin:
+            self.alloc_host = self._alloc_pinned
+
+    def _alloc_pinned(self, nbytes: int):
+        """Page-locked read buffer: SSD -> RAM lands directly in memory the
+        GPU can DMA from, so RAM -> VRAM copies run at bus speed."""
+        from ..uvm.io import ALIGN, aligned_buffer
+        size = max(ALIGN, (nbytes + ALIGN - 1) // ALIGN * ALIGN)
+        if self.pin:
+            try:
+                arr = torch.empty(size, dtype=torch.uint8, pin_memory=True).numpy()
+                if arr.ctypes.data % ALIGN == 0:
+                    return arr
+            except RuntimeError:
+                pass
+            self.pin = False                    # locked-memory limit reached: fall back
+        return aligned_buffer(nbytes)
 
     def upload(self, buf):
         if isinstance(buf, torch.Tensor):
-            return buf.to(self.dev, non_blocking=True)
-        return torch.from_numpy(np.asarray(buf)).to(self.dev, non_blocking=True)
+            return buf.to(self.dev)
+        return torch.from_numpy(np.asarray(buf)).to(self.dev)
 
     def download(self, handle) -> np.ndarray:
         return handle.detach().cpu().numpy()
@@ -36,12 +54,12 @@ class TorchBackend:
     name = "torch"
 
     def __init__(self, device: str = "auto", threads: int | None = None,
-                 matmul_dtype: str = "auto", **kw):
+                 matmul_dtype: str = "auto", pin_host_memory: bool = False, **kw):
         if device in (None, "auto"):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dev = torch.device(device)
         self.is_gpu = self.dev.type != "cpu"
-        self.device = TorchDevice(self.dev)
+        self.device = TorchDevice(self.dev, pin=pin_host_memory)
         # dtype used for the matmul itself: storage dtype on GPU (BF16 stays BF16,
         # no 2x blow-up in VRAM), float32 on CPU where BF16 kernels are slow.
         self.native = self.is_gpu if matmul_dtype == "auto" else matmul_dtype == "native"

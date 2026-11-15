@@ -56,6 +56,18 @@ def _size(v) -> int:
 parse_size = _size
 
 
+def _row_aligned(e) -> bool:
+    """Block-quantised tensors can only be split between rows when a row is a
+    whole number of quantisation blocks."""
+    from ..formats.dtypes import GGML_BLOCK
+    if e.dtype not in GGML_BLOCK:
+        return True
+    per_row = 1
+    for d in e.shape[1:]:
+        per_row *= d
+    return per_row % GGML_BLOCK[e.dtype][0] == 0
+
+
 class _Loc:
     __slots__ = ("entry", "block", "off", "chunks", "rows_per_chunk")
 
@@ -117,7 +129,8 @@ class WeightStore:
                 cur = [gkey, rule, e.path, e.offset, e.offset + e.nbytes, [e]]
                 continue
             flush()
-            if rule.chunk_bytes and e.nbytes > rule.chunk_bytes and len(e.shape) >= 2:
+            if (rule.chunk_bytes and e.nbytes > rule.chunk_bytes and len(e.shape) >= 2
+                    and _row_aligned(e)):
                 row_bytes = e.nbytes // e.shape[0]
                 rpc = max(1, rule.chunk_bytes // row_bytes)
                 chunks = [mem.map_file(e.path, e.offset + r * row_bytes,

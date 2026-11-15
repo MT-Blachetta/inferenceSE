@@ -140,7 +140,8 @@ class UnifiedMemory:
         self.resident: list[dict[int, Block]] = [{}, {}]
         self.policy = make_policy(policy, **(policy_args or {}))
         self.device = device or HostDevice()
-        self.files = FileStore(direct=direct_io, io_threads=io_threads)
+        self.files = FileStore(direct=direct_io, io_threads=io_threads,
+                               allocator=getattr(self.device, "alloc_host", None))
         self.swap_path = swap_path
         self.swap: SwapFile | None = None
         self.mirror = mirror
@@ -149,6 +150,7 @@ class UnifiedMemory:
         self.clock = 0
         self.lock = threading.RLock()
         self.inflight: dict[int, object] = {}
+        self._refused: list = [None, None]
         self.classes: dict[str, BlockClass] = {}
         self.t_io = 0.0
         self.transient_gpu_bytes = 0
@@ -287,6 +289,7 @@ class UnifiedMemory:
                 return False
             self._make_room(T_RAM, b, force=True)
         b.buf1 = data if not self.dry else True
+        self._refused[T_RAM] = None
         self.used[T_RAM] += b.nbytes
         self.resident[T_RAM][b.id] = b
         if b.klass.pin:
@@ -295,6 +298,7 @@ class UnifiedMemory:
 
     def _set_gpu(self, b: Block, handle) -> None:
         b.buf0 = handle
+        self._refused[T_GPU] = None
         self.used[T_GPU] += b.nbytes
         self.resident[T_GPU][b.id] = b
         b.klass.stats["promote"] += 1
@@ -323,6 +327,9 @@ class UnifiedMemory:
             return True
         now = self.clock
         cand_pri = -1.0 if force else self.policy.priority(cand, now)
+        memo = self._refused[tier]
+        if memo is not None and memo[0] == self.policy.step and cand_pri > memo[1]:
+            return False        # a scan this step already showed nothing ranks below this
         target = need + int(cap * self.watermark)
         scored = [(self.policy.priority(b, now), b) for b in self.resident[tier].values()
                   if not b.pinned and not b.busy and b is not cand]
@@ -337,6 +344,8 @@ class UnifiedMemory:
             victims.append(b)
             gain += b.nbytes
         if gain < freed:
+            if not force:       # remember the least valuable resident: cheaper refusals
+                self._refused[tier] = (self.policy.step, scored[0][0] if scored else float("-inf"))
             return False
         for b in victims:
             self._evict(tier, b)

@@ -93,6 +93,15 @@ def _q4_0(b):
     return d * q.astype(np.float32)
 
 
+def _q5_0(b):
+    d = b[:, :2].copy().view("<f2").astype(np.float32)
+    qh = b[:, 2:6].copy().view("<u4")                               # one high bit per element
+    bits = ((qh >> np.arange(32, dtype=np.uint32)[None, :]) & 1).astype(np.uint8)
+    qs = b[:, 6:]
+    q = np.concatenate([qs & 0x0F, qs >> 4], axis=1) | (bits << 4)
+    return d * (q.astype(np.float32) - 16.0)
+
+
 def _k4_scales(sc):
     """Unpack the 8 six-bit (scale, min) pairs of a K-quant block."""
     d = np.empty((sc.shape[0], 8), np.uint8)
@@ -131,4 +140,4 @@ def _q6_k(b):
     return (d[:, :, None, None] * s * q.astype(np.float32)).reshape(n, 256)
 
 
-_GGML = {"Q8_0": _q8_0, "Q4_0": _q4_0, "Q4_K": _q4_k, "Q6_K": _q6_k}
+_GGML = {"Q8_0": _q8_0, "Q4_0": _q4_0, "Q5_0": _q5_0, "Q4_K": _q4_k, "Q6_K": _q6_k}

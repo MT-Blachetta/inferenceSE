@@ -134,14 +134,14 @@ class Profile:
                 mod.register(registry)
         return registry
 
-    def tokenizer(self, model_dir: str | None):
+    def tokenizer(self, model_dir: str | None, gguf_meta: dict | None = None):
         spec = self.doc.get("tokenizer") or {}
         if isinstance(spec, str):
             spec = {"plugin": spec}
         if "plugin" in spec:
             return self._module(spec["plugin"]).load(model_dir, self)
         from ..tokenizers import load_tokenizer
-        return load_tokenizer(model_dir, spec, profile_dir=self.dir)
+        return load_tokenizer(model_dir, spec, profile_dir=self.dir, gguf_meta=gguf_meta)
 
     def _module(self, rel: str, inject: dict | None = None):
         path = self.file(rel)

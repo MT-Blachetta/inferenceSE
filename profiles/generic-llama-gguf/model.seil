@@ -1,0 +1,35 @@
+; LLaMA-family decoder, GGUF tensor names.  llama.cpp stores the query/key
+; projections with interleaved rotary pairs, hence rope_style="interleaved".
+program llama_gguf
+
+func main(%tokens) -> %logits
+  let A = cfg.gguf["general.architecture"]
+  let eps = cfg.gguf[f"{A}.attention.layer_norm_rms_epsilon"]
+  %x = embed @"token_embd.weight", %tokens
+  for i in range(cfg.gguf[f"{A}.block_count"])
+    %x = call block(i, %x, A, eps)
+  end
+  %x = last %x
+  %x = rmsnorm %x, @"output_norm.weight", eps=eps
+  %logits = linear %x, @"output.weight"
+  ret %logits
+end
+
+func block(i, %x, A, eps) -> %x
+  let heads = cfg.gguf[f"{A}.attention.head_count"]
+  %h = rmsnorm %x, @"blk.{i}.attn_norm.weight", eps=eps
+  %a = attention %h, q=@"blk.{i}.attn_q.weight", k=@"blk.{i}.attn_k.weight", \
+                     v=@"blk.{i}.attn_v.weight", o=@"blk.{i}.attn_output.weight", \
+                     heads=heads, kv_heads=cfg.gguf.get(f"{A}.attention.head_count_kv", heads), \
+                     rope_theta=cfg.gguf.get(f"{A}.rope.freq_base", 10000.0), \
+                     rope_style="interleaved", key=f"attn.{i}"
+  %x = add %x, %a
+  %h = rmsnorm %x, @"blk.{i}.ffn_norm.weight", eps=eps
+  %g = linear %h, @"blk.{i}.ffn_gate.weight"
+  %u = linear %h, @"blk.{i}.ffn_up.weight"
+  %g = silu %g
+  %m = mul %g, %u
+  %m = linear %m, @"blk.{i}.ffn_down.weight"
+  %x = add %x, %m
+  ret %x
+end

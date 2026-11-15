@@ -37,8 +37,8 @@ def mxfp4_decode(B, packed, scale, out_features, in_features):
     ``scale``:  uint8 [out, in/32], E8M0 exponent (2**(s-127)) per 32 values.
     """
     if torch is not None and isinstance(packed, torch.Tensor):
-        lut = B.cache_lut if hasattr(B, "cache_lut") else None
-        if lut is None:
+        lut = getattr(B, "cache_lut", None)
+        if lut is None or lut.device != packed.device:
             lut = B.cache_lut = torch.from_numpy(FP4).to(packed.device)
         p = packed.reshape(out_features, in_features // 2)
         w = torch.stack((lut[(p & 0x0F).long()], lut[(p >> 4).long()]), dim=-1)
@@ -295,6 +295,22 @@ def moe(ctx, x, layer, prefix):
         if a + group < len(used):
             mem.prefetch(ws.blocks([first(e) for e in used[a + group:a + 2 * group]]))
         raws = ws.raw_many([W(f"{prefix}.experts.{e}.{p}") for e in chunk for p in parts])
+        if T == 1:
+            # decoding: every expert of the group serves the same token, so the
+            # group is unpacked and applied as one batched operation
+            n = len(chunk)
+            pk = lambda k: B.cat([B.raw(raws[6 * j + k]).reshape(-1) for j in range(n)], 0)
+            w1 = mxfp4_decode(B, pk(0), pk(1), n * inter, lat).reshape(n, inter, lat)
+            w3 = mxfp4_decode(B, pk(4), pk(5), n * inter, lat).reshape(n, inter, lat)
+            hmid = situ_glu(B, B.einsum("eil,l->ei", w1, z[0]), B.einsum("eil,l->ei", w3, z[0]),
+                            beta, lbeta)
+            del w1, w3
+            w2 = mxfp4_decode(B, pk(2), pk(3), n * lat, inter).reshape(n, lat, inter)
+            y = B.einsum("eli,ei->el", w2, hmid)                           # [n, lat]
+            slot = {int(e): s for s, e in enumerate(ids_np[0].tolist())}
+            wt = weights[0][B.asarray([slot[e] for e in chunk], "i64")]
+            acc = acc + B.sum(y * wt[:, None], 0, True)
+            continue
         for j, e in enumerate(chunk):
             p1, s1, p2, s2, p3, s3 = (B.raw(r) for r in raws[6 * j:6 * j + 6])
             tok, slot = np.nonzero(ids_np == e)

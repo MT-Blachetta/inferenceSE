@@ -73,7 +73,7 @@ def test_gguf_reader(tmp_path):
     assert np.allclose(got, 0.5 * np.arange(32))
 
 
-@pytest.mark.parametrize("qtype", ["Q8_0", "Q4_0", "Q4_K", "Q6_K"])
+@pytest.mark.parametrize("qtype", ["Q8_0", "Q4_0", "Q5_0", "Q4_K", "Q6_K"])
 def test_ggml_dequant_matches_reference(qtype):
     """Our block decoders against the reference decoder of the gguf package."""
     gguf = pytest.importorskip("gguf")
@@ -82,7 +82,7 @@ def test_ggml_dequant_matches_reference(qtype):
     rng = np.random.default_rng(0)
     blocks = rng.integers(0, 256, (16, size), dtype=np.uint8)
     scale = rng.uniform(0.01, 0.2, (16, 2)).astype(np.float16)        # finite block scales
-    if qtype in ("Q8_0", "Q4_0"):
+    if qtype in ("Q8_0", "Q4_0", "Q5_0"):
         blocks[:, 0:2] = scale[:, :1].view(np.uint8)
     elif qtype == "Q4_K":
         blocks[:, 0:4] = scale.view(np.uint8)

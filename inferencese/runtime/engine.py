@@ -50,6 +50,8 @@ class Engine:
         cfg_dir = self.model_dir if self.model_dir and os.path.isdir(self.model_dir) else (
             os.path.dirname(self.model_dir) if self.model_dir else None)
         self.cfg = p.config(cfg_dir)
+        if "gguf" in self.catalog.metadata:              # GGUF carries its configuration inside
+            self.cfg.setdefault("gguf", self.catalog.metadata["gguf"])
 
         # ---- backend and tiers
         hw = self.hardware = detect(self.model_dir or ".")
@@ -67,7 +69,8 @@ class Engine:
                 hw["ram"]["available"] = parse_size(ph["ram"]["total"])
         else:
             self.B = make_backend(rt.get("backend", "auto"), rt.get("device", "auto"),
-                                  threads=rt.get("threads"))
+                                  threads=rt.get("threads"),
+                                  pin_host_memory=bool(rt.get("pin_host_memory", False)))
             if self.B.is_gpu:
                 free = hw["gpus"][0]["free"] if hw["gpus"] else 0
                 gpu_bytes = _capacity(g.get("capacity", "auto"), free, g.get("reserve", "6GiB"))
@@ -95,7 +98,7 @@ class Engine:
         self.ctx = Context(self.B, self.ws, self.mem, self.cfg, rt)
         program, path = p.program()
         self.vm = VM(program, p.ops(), self.ctx, path)
-        self.tokenizer = None if dry else p.tokenizer(cfg_dir)
+        self.tokenizer = None if dry else p.tokenizer(cfg_dir, self.catalog.metadata.get("gguf"))
         import hashlib
         tag = hashlib.sha1(os.path.abspath(self.model_dir or "-").encode()).hexdigest()[:10]
         self.heat_path = os.path.join(p.state_dir(), f"heat-{tag}.json")
