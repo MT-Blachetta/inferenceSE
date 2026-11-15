@@ -1,0 +1,21 @@
+# Unified-memory layout.  Capacities accept sizes ("24GiB"), percentages of the
+# detected free memory ("80%") or "auto" (free memory minus `reserve`).
+tiers:
+  gpu: {capacity: auto, reserve: 2GiB}      # tier 0: VRAM (only with a GPU backend)
+  ram: {capacity: auto, reserve: 4GiB}      # tier 1: host RAM
+  ssd: {direct_io: true, io_threads: 8}     # tier 2: the model files themselves
+
+policy: {name: plan}                        # evict what is needed furthest in the future
+
+classes:                                    # first match wins
+  embedding:
+    match: ['embed_tokens\.weight$']
+    tier: ram
+    chunk_bytes: 4MiB                       # a token lookup faults in one small chunk
+    prior: 0.05
+  weights:
+    match: ['.*']
+    tier: gpu
+    planned: true                           # layers are visited in the same order every step
+
+state: {tier: gpu, rows_per_block: 512}     # KV cache pages out like any other block

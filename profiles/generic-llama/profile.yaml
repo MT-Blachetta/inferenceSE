@@ -1,0 +1,29 @@
+# Generic profile for LLaMA-family decoder-only transformers stored as
+# Hugging Face safetensors (LLaMA, Mistral, SmolLM, TinyLlama, Qwen2-style ...).
+# It makes no assumption about the host: capacities are detected at start-up.
+name: generic-llama
+description: Decoder-only transformer (RMSNorm, RoPE, GQA, SwiGLU MLP), any size.
+format_version: 1
+
+model:
+  type: llm
+  architecture: dense-transformer
+  file_types: [safetensors]
+  path: null                     # pass --model /path/to/model
+  aliases:                       # tied input/output embeddings
+    lm_head.weight: model.embed_tokens.weight
+
+program: model.seil
+tokenizer: {type: auto}
+memory: memory.yaml
+
+runtime:
+  backend: auto                  # torch+CUDA when available, else numpy
+  device: auto
+  prefill_chunk: 256             # prompt tokens processed per pass over the weights
+  add_bos: true
+
+sampling:
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 40
