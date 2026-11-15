@@ -4,8 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
-
 import yaml
 
 from .profile.loader import list_profiles, set_path
@@ -255,7 +253,6 @@ def main(argv=None):
     p.set_defaults(fn=cmd_new_profile)
 
     args = ap.parse_args(argv)
-    t0 = time.time()
     try:
         args.fn(args)
     except (FileNotFoundError, ValueError, KeyError) as e:

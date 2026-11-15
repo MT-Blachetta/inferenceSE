@@ -139,6 +139,13 @@ Measured in the development sandbox (4 CPU cores, 15 GB RAM, no GPU):
   in chunks, or token by token — for the LLaMA program and the Kimi program.
 - **Context pages too.** A KV cache larger than the RAM tier is written to the
   swap file and read back with unchanged results.
+- **A model about 100 times larger than the machine's RAM runs.** `inferencese
+  replica` rebuilds the exact file layout of the 1.56 TB Kimi K3.1 Pro
+  checkpoint as sparse files (true sizes, headers and offsets; weights read as
+  zeros). On that layout the `myKimi3` program completed three forward passes
+  over all 93 layers with a 6 GiB cache: 419 GiB read in 14,803 requests,
+  peak process memory 9.0 GiB, finite logits over the 163,840-token
+  vocabulary. With NumPy on 4 cores a pass took 9 to 15 minutes.
 - **Formats.** GGML block decoders (Q4_0, Q5_0, Q8_0, Q4_K, Q6_K) agree with
   the reference decoder of the `gguf` package.
 

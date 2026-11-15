@@ -174,6 +174,17 @@ Checked:
   times smaller than the model. That exercises the KDA state, the
   convolution history, the sparse-attention cache and its top-k path, and
   attention residuals across block boundaries.
+- An end-to-end run on the real file layout. `inferencese replica myKimi3
+  <dir>` recreates all 96 shards as sparse files with their true sizes,
+  headers and tensor offsets (1,454 GiB apparent, 87 MB on disk; weights read
+  as zeros, small tensors random). On a machine with 15 GB of RAM and no GPU,
+  with a 6 GiB cache and the NumPy backend, the profile processed a 2-token
+  prompt and generated 2 tokens: three passes over all 93 layers, 1,472
+  experts read per pass, 419 GiB read from the SSD in 14,803 requests, context
+  state paged to the swap file, peak process memory 9.0 GiB, finite logits of
+  size 163,840. The passes took 897 s, 566 s and 527 s. This shows that the
+  catalog, the memory plan, the paging and the program work at full size; it
+  says nothing about output quality.
 - MXFP4 decoding against the bit-level definition; attention-residual mixing
   against a transcription of the reference kernel's loop; the router's
   selection and weighting.
@@ -202,3 +213,13 @@ Known deviations from the reference:
 
 The first thing to do on the real machine is a short greedy generation and a
 look at whether the text is coherent.
+
+To repeat the full-size dry run anywhere:
+
+```bash
+inferencese replica myKimi3 /tmp/kimi-replica
+```
+
+```bash
+inferencese run myKimi3 -m /tmp/kimi-replica --backend numpy --ram 6GiB --set memory.warmup=[] -p "ab" -n 2
+```
