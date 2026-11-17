@@ -70,6 +70,10 @@ in [docs/PROFILES.md](docs/PROFILES.md).
 
 ## Install
 
+New to Linux, or setting up the Kimi K3.1 Pro machine from a fresh Ubuntu?
+[how-to-run.md](how-to-run.md) walks through every step, from the graphics
+driver to the chat window.
+
 ```bash
 pip install -e ".[tokenizers]"
 ```
