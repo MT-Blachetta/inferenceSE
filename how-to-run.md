@@ -281,6 +281,14 @@ slow.
 
 ## Step 6: Download inferenceSE
 
+> **Important.** On GitHub, the program is not on the repository's default
+> page ("main"), which holds only a `LICENSE` file. It is on a separate branch
+> called `claude/focused-mccarthy-3u3td5`. If you download the default page,
+> Step 7 fails with
+> `does not appear to be a Python project: neither 'setup.py' nor 'pyproject.toml' found`.
+> The command below picks the right branch, and the check at the end of this
+> step catches the mistake before it causes trouble.
+
 This copies the program into the folder `~/inferenceSE`:
 
 ```bash
@@ -291,21 +299,69 @@ cd ~
 git clone -b claude/focused-mccarthy-3u3td5 https://github.com/MT-Blachetta/inferenceSE.git
 ```
 
-(`-b claude/focused-mccarthy-3u3td5` picks the branch that contains the
-`myKimi3` profile. Once that work has been merged into the main version, the
-plain command without `-b …` will do.)
+(`-b claude/focused-mccarthy-3u3td5` picks the branch. Type it exactly,
+including the `-b`. Once the work has been merged into "main", the command
+without `-b …` will do.)
+
+If git answers `fatal: destination path 'inferenceSE' already exists`, you
+have downloaded it before. Do not skip ahead: use the repair commands at the
+end of this step.
 
 > **If git asks for a user name and password**, the repository is private.
 > Ask its owner for access, or log in to GitHub in your browser, open the
-> repository page, switch the branch selector to
-> `claude/focused-mccarthy-3u3td5`, click **Code → Download ZIP**, and unpack
-> the ZIP into your home folder so that the folder is called `inferenceSE`.
+> repository page, click the branch button that says **main** (top left,
+> above the file list), choose `claude/focused-mccarthy-3u3td5`, then click
+> **Code → Download ZIP**. Unpack the ZIP into your home folder and rename the
+> unpacked folder to `inferenceSE`.
 
-Go into the new folder:
+Go into the folder:
 
 ```bash
 cd ~/inferenceSE
 ```
+
+**Check that you have the complete program:**
+
+```bash
+ls
+```
+
+You must see, among others, **`pyproject.toml`**, `inferencese`, `profiles`,
+`how-to-run.md` and `README.md`. If you see **only `LICENSE`**, you have the
+default page instead of the branch. Repair it, without downloading anything
+twice, with these two commands:
+
+```bash
+git fetch origin claude/focused-mccarthy-3u3td5
+```
+
+```bash
+git checkout claude/focused-mccarthy-3u3td5
+```
+
+Run `ls` again; `pyproject.toml` must now be there.
+
+If `git fetch` says `not a git repository`, the folder came from a ZIP of the
+default page. Delete it and download again:
+
+```bash
+cd ~
+```
+
+```bash
+rm -rf ~/inferenceSE
+```
+
+```bash
+git clone -b claude/focused-mccarthy-3u3td5 https://github.com/MT-Blachetta/inferenceSE.git
+```
+
+```bash
+cd ~/inferenceSE
+```
+
+(Deleting the folder also deletes the Python environment from Step 7 if you
+had already created it; simply do Step 7 again.)
 
 ---
 
@@ -340,11 +396,21 @@ the graphics card. It is about 3 GB:
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Install **inferenceSE** itself, with the tokenizer packages it needs for Kimi:
+Install **inferenceSE** itself, with the tokenizer packages it needs for Kimi.
+This command must be run **inside the folder `~/inferenceSE`** (the `.` in it
+means "the current folder"), so go there first:
+
+```bash
+cd ~/inferenceSE
+```
 
 ```bash
 pip install -e ".[tokenizers]"
 ```
+
+If this ends with `neither 'setup.py' nor 'pyproject.toml' found`, you are
+either in the wrong folder or downloaded the wrong branch: go back to the
+check at the end of [Step 6](#step-6-download-inferencese).
 
 Install the **Hugging Face download tool**, used in Step 8:
 
@@ -713,6 +779,34 @@ uv venv --python 3.12 --seed ~/inferenceSE/.venv
 ```
 
 Then continue Step 7 from `source ~/inferenceSE/.venv/bin/activate`.
+
+#### `does not appear to be a Python project: neither 'setup.py' nor 'pyproject.toml' found`
+
+This appears at `pip install -e ".[tokenizers]"` (Step 7). Two possible
+causes:
+
+1. **The wrong folder.** The command must run in `~/inferenceSE`. Run
+   `cd ~/inferenceSE` and try again.
+2. **The wrong branch.** Run `ls ~/inferenceSE`. If you see only `LICENSE`,
+   you downloaded the repository's default page, not the branch with the
+   program. Repair it:
+
+   ```bash
+   cd ~/inferenceSE
+   ```
+
+   ```bash
+   git fetch origin claude/focused-mccarthy-3u3td5
+   ```
+
+   ```bash
+   git checkout claude/focused-mccarthy-3u3td5
+   ```
+
+   Then run the `pip install -e ".[tokenizers]"` command again. The Python
+   environment you already created stays valid. If `git fetch` says
+   `not a git repository`, follow the delete-and-download instructions at the
+   end of [Step 6](#step-6-download-inferencese).
 
 #### `inferencese: command not found`
 
